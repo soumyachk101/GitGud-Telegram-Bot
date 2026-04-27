@@ -57,6 +57,8 @@ def extract_github_repo(text):
     owner, repo = match.group(1), match.group(2)
     if repo.endswith(".git"):
         repo = repo[:-4]
+    if not owner or not repo:
+        return None
     if owner[0] in ".-" or owner[-1] in ".-" or repo[0] in ".-" or repo[-1] in ".-":
         return None
     return owner, repo
@@ -89,6 +91,7 @@ async def github_repo_exists(owner: str, repo: str):
                 return None
 
         if GITHUB_TOKEN:
+            # Support both token formats for broader PAT compatibility.
             for scheme in ("Bearer", "token"):
                 result = _attempt(f"{scheme} {GITHUB_TOKEN}")
                 if result != "unauthorized":
