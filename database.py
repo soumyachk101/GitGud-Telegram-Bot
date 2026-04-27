@@ -5,6 +5,11 @@ import os
 DB_PATH = os.getenv("DB_PATH", "gitgud.db")
 
 async def init_db():
+    # Ensure the directory exists if a path is provided
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+        
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
