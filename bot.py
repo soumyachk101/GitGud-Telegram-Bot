@@ -91,7 +91,8 @@ async def github_repo_exists(owner: str, repo: str):
                 return None
 
         if GITHUB_TOKEN:
-            # Support both token formats for broader PAT compatibility.
+            # GitHub tokens in the wild may require either Bearer or token schemes.
+            # Try both for compatibility across token types/configurations.
             for scheme in ("Bearer", "token"):
                 result = _attempt(f"{scheme} {GITHUB_TOKEN}")
                 if result != "unauthorized":
@@ -182,7 +183,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         repo_exists = await github_repo_exists(owner, repo)
         if repo_exists is True:
             await update.message.reply_text(
-                f"Repo link detected: {owner}/{repo} ✅\n\nI can't review repo links directly yet. Paste code or use /roast."
+                f"Repo link detected: {owner}/{repo} ✅\n\nRepository links aren't supported for automatic review yet. Paste code directly or use /roast."
             )
         elif repo_exists is False:
             await update.message.reply_text(
