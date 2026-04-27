@@ -28,7 +28,7 @@ CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 1800)) # 30 mins
 CODE_KEYWORDS = [
     r'\bdef\b', r'\bfunction\b', r'\bconst\b', r'\blet\b', r'\bvar\b',
     r'\bimport\b', r'\bfrom\b', r'#include', r'\bpublic class\b', r'\basync\b', r'\bawait\b',
-    r'print\(', r'console\.log', r'(?m)^\s*[A-Za-z_]\w*\s*=\s*.+$'
+    r'print\(', r'console\.log'
 ]
 
 GITHUB_REPO_URL_PATTERN = re.compile(r'https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/|$)')
@@ -67,7 +67,7 @@ async def github_repo_exists(owner: str, repo: str):
             "User-Agent": "GitGud-Telegram-Bot"
         }
         if GITHUB_TOKEN:
-            headers["Authorization"] = f"token {GITHUB_TOKEN}"
+            headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
         request = urllib.request.Request(url, headers=headers)
         try:
