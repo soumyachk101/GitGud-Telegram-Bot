@@ -1,7 +1,8 @@
 import aiosqlite
 import time
+import os
 
-DB_PATH = "spaghettisniffer.db"
+DB_PATH = os.getenv("DB_PATH", "gitgud.db")
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
