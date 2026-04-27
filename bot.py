@@ -1,6 +1,9 @@
 import logging
 import os
 import re
+import asyncio
+import urllib.request
+import urllib.error
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
@@ -18,22 +21,87 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 NUDGE_THRESHOLD = int(os.getenv("NUDGE_THRESHOLD", 7200)) # 2 hours
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 1800)) # 30 mins
 
 CODE_KEYWORDS = [
-    r'\{', r'\}', r';', r'def ', r'function ', r'const ', r'let ', r'var ',
-    r'import ', r'from ', r'#include', r'public class', r'async ', r'await ',
-    r'print\(', r'console\.log', r'=', r'\+', r'-', r'\*', r'/'
+    r'\bdef\b', r'\bfunction\b', r'\bconst\b', r'\blet\b', r'\bvar\b',
+    r'\bimport\b', r'\bfrom\b', r'#include', r'\bpublic class\b', r'\basync\b', r'\bawait\b',
+    r'print\(', r'console\.log'
 ]
+
+GITHUB_REPO_URL_PATTERN = re.compile(r'https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/|$)')
 
 def is_code(text):
     if not text or len(text) < 5:
         return False
-    # Simple heuristic: check for common code markers
+    stripped = text.strip()
+    if stripped.startswith('```') and stripped.endswith('```'):
+        return True
+
     matches = sum(1 for pattern in CODE_KEYWORDS if re.search(pattern, text))
-    # If it has multiple lines or common code symbols, it's probably code
-    return matches >= 1 or '\n' in text or (text.strip().startswith('```') and text.strip().endswith('```'))
+    if matches >= 2:
+        return True
+
+    if '\n' in text:
+        non_empty_lines = [line for line in text.splitlines() if line.strip()]
+        return len(non_empty_lines) >= 2 and matches >= 1
+
+    return False
+
+def extract_github_repo(text):
+    match = GITHUB_REPO_URL_PATTERN.search(text or "")
+    if not match:
+        return None
+    owner, repo = match.group(1), match.group(2)
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if not owner or not repo:
+        return None
+    if owner[0] in ".-" or owner[-1] in ".-" or repo[0] in ".-" or repo[-1] in ".-":
+        return None
+    return owner, repo
+
+async def github_repo_exists(owner: str, repo: str):
+    def _check():
+        url = f"https://api.github.com/repos/{owner}/{repo}"
+
+        def _attempt(auth_header=None):
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "GitGud-Telegram-Bot"
+            }
+            if auth_header:
+                headers["Authorization"] = auth_header
+
+            request = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return response.getcode() == 200
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    return False
+                if e.code == 401 and auth_header:
+                    return "unauthorized"
+                logger.warning(f"Failed to verify GitHub repo {owner}/{repo}: HTTP {e.code}")
+                return None
+            except Exception as e:
+                logger.warning(f"Failed to verify GitHub repo {owner}/{repo}: {e}")
+                return None
+
+        if GITHUB_TOKEN:
+            # GitHub tokens in the wild may require either Bearer or token schemes.
+            # Try both for compatibility across token types/configurations.
+            for scheme in ("Bearer", "token"):
+                result = _attempt(f"{scheme} {GITHUB_TOKEN}")
+                if result != "unauthorized":
+                    return result
+            return None
+
+        return _attempt()
+
+    return await asyncio.to_thread(_check)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -101,6 +169,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     logger.info(f"Received message from {update.effective_user.username}: {text[:20]}...")
+
+    repo_ref = extract_github_repo(text)
+    if repo_ref:
+        text_without_repo = GITHUB_REPO_URL_PATTERN.sub(" ", text).strip()
+        # If the message still looks like code after removing the repo URL,
+        # prioritize code roasting over link-only handling.
+        if text_without_repo and is_code(text_without_repo):
+            repo_ref = None
+
+    if repo_ref:
+        owner, repo = repo_ref
+        repo_exists = await github_repo_exists(owner, repo)
+        if repo_exists is True:
+            await update.message.reply_text(
+                f"Repo link detected: {owner}/{repo} ✅\n\nRepository links aren't supported for automatic review yet. Paste code directly or use /roast."
+            )
+        elif repo_exists is False:
+            await update.message.reply_text(
+                "That GitHub repo link doesn't seem valid. Check owner/repo and try again."
+            )
+        else:
+            await update.message.reply_text(
+                "I detected a GitHub repo link, but couldn't verify it right now. Try again in a bit."
+            )
+        return
 
     if is_code(text):
         await perform_roast(update, context, text)
