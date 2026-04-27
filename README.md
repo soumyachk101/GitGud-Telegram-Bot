@@ -13,6 +13,7 @@ The hyper-toxic Senior Developer bot that roasts your code using Groq-powered AI
    - Copy `.env.example` to `.env`.
    - Add your `TELEGRAM_BOT_TOKEN` (from @BotFather).
    - Add your `GROQ_API_KEY` (from Groq Cloud).
+   - (Optional, recommended) Add `GITHUB_TOKEN` to avoid GitHub API rate limits for repo-link reviews.
 4. **Run the Bot**:
    ```bash
    python bot.py
@@ -21,6 +22,7 @@ The hyper-toxic Senior Developer bot that roasts your code using Groq-powered AI
 ## 🔥 Features
 
 *   **Instant Roast**: Send any code snippet, get a savage critique.
+*   **Repo Link Review**: Send a GitHub repository link and GitGud will sample files and roast the codebase automatically.
 *   **Manager Mode**: Use `/manager_on` to have the bot check in on you every 2 hours. If you haven't submitted code, prepare for a sarcastic nudge.
 *   **Smell Rating**: Every roast starts with a tier (Decent to Biological Hazard).
 *   **The Least You Could Do**: A tiny, condescending tip at the end of every roast.

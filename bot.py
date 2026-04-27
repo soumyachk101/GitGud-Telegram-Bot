@@ -2,8 +2,11 @@ import logging
 import os
 import re
 import asyncio
+import base64
+import json
 import urllib.request
 import urllib.error
+import urllib.parse
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
@@ -24,6 +27,9 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 NUDGE_THRESHOLD = int(os.getenv("NUDGE_THRESHOLD", 7200)) # 2 hours
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 1800)) # 30 mins
+MAX_REVIEW_FILES = int(os.getenv("MAX_REVIEW_FILES", 6))
+MAX_REVIEW_FILE_SIZE = int(os.getenv("MAX_REVIEW_FILE_SIZE", 6000))
+MAX_REVIEW_TOTAL_CHARS = int(os.getenv("MAX_REVIEW_TOTAL_CHARS", 18000))
 
 CODE_KEYWORDS = [
     r'\bdef\b', r'\bfunction\b', r'\bconst\b', r'\blet\b', r'\bvar\b',
@@ -32,6 +38,12 @@ CODE_KEYWORDS = [
 ]
 
 GITHUB_REPO_URL_PATTERN = re.compile(r'https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/|$)')
+TEXT_FILE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".cpp", ".cc", ".c", ".h",
+    ".hpp", ".cs", ".rb", ".php", ".swift", ".kt", ".kts", ".scala", ".sh", ".sql", ".yaml",
+    ".yml", ".json", ".toml", ".ini", ".cfg", ".md", ".txt", ".html", ".css"
+}
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 def is_code(text):
     if not text or len(text) < 5:
@@ -102,6 +114,118 @@ async def github_repo_exists(owner: str, repo: str):
         return _attempt()
 
     return await asyncio.to_thread(_check)
+
+def is_text_like_path(path: str):
+    lower = path.lower()
+    if lower.endswith(("/readme", "/license", "/changelog")):
+        return True
+    _, ext = os.path.splitext(lower)
+    return ext in TEXT_FILE_EXTENSIONS
+
+async def github_api_get_json(url: str):
+    def _fetch():
+        def _attempt(auth_header=None):
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "GitGud-Telegram-Bot"
+            }
+            if auth_header:
+                headers["Authorization"] = auth_header
+
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            if GITHUB_TOKEN:
+                for scheme in ("Bearer", "token"):
+                    try:
+                        return _attempt(f"{scheme} {GITHUB_TOKEN}")
+                    except urllib.error.HTTPError as e:
+                        if e.code != 401:
+                            raise
+                return None
+            return _attempt()
+        except urllib.error.HTTPError as e:
+            logger.warning(f"GitHub API request failed ({url}): HTTP {e.code}")
+            return None
+        except Exception as e:
+            logger.warning(f"GitHub API request failed ({url}): {e}")
+            return None
+
+    return await asyncio.to_thread(_fetch)
+
+async def build_repo_review_input(owner: str, repo: str):
+    repo_meta = await github_api_get_json(f"https://api.github.com/repos/{owner}/{repo}")
+    if not repo_meta:
+        return None
+
+    default_branch = repo_meta.get("default_branch") or "main"
+    tree = await github_api_get_json(
+        f"https://api.github.com/repos/{owner}/{repo}/git/trees/{default_branch}?recursive=1"
+    )
+    if not tree or not tree.get("tree"):
+        return None
+
+    candidate_files = []
+    for item in tree["tree"]:
+        if item.get("type") != "blob":
+            continue
+        path = item.get("path", "")
+        size = item.get("size", 0)
+        if not path or not is_text_like_path(path) or size > MAX_REVIEW_FILE_SIZE:
+            continue
+        candidate_files.append(path)
+
+    if not candidate_files:
+        return None
+
+    selected_files = sorted(candidate_files, key=lambda p: (0 if p.lower().startswith("readme") else 1, len(p)))[:MAX_REVIEW_FILES]
+    snippets = []
+    total_chars = 0
+
+    for file_path in selected_files:
+        encoded_path = urllib.parse.quote(file_path)
+        content_data = await github_api_get_json(
+            f"https://api.github.com/repos/{owner}/{repo}/contents/{encoded_path}?ref={default_branch}"
+        )
+        if not content_data or content_data.get("encoding") != "base64" or not content_data.get("content"):
+            continue
+        try:
+            decoded = base64.b64decode(content_data["content"]).decode("utf-8", errors="replace")
+        except Exception:
+            continue
+        if not decoded.strip():
+            continue
+        remaining = MAX_REVIEW_TOTAL_CHARS - total_chars
+        if remaining <= 0:
+            break
+        snippet = decoded[:remaining]
+        total_chars += len(snippet)
+        snippets.append(f"### {file_path}\n{snippet}")
+
+    if not snippets:
+        return None
+
+    description = repo_meta.get("description") or "No description"
+    language = repo_meta.get("language") or "Unknown"
+    return (
+        f"Repository: {owner}/{repo}\n"
+        f"Description: {description}\n"
+        f"Primary language: {language}\n"
+        f"Default branch: {default_branch}\n\n"
+        "Files sampled for review:\n\n"
+        + "\n\n".join(snippets)
+    )
+
+def truncate_for_telegram(text: str, max_len: int = TELEGRAM_MAX_MESSAGE_LENGTH):
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len].rstrip()
+    last_space = truncated.rfind(" ")
+    if last_space > int(max_len * 0.75):
+        truncated = truncated[:last_space]
+    return truncated.rstrip() + "…"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -182,8 +306,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner, repo = repo_ref
         repo_exists = await github_repo_exists(owner, repo)
         if repo_exists is True:
+            await update.message.reply_text(f"Repo link detected: {owner}/{repo} ✅\nReviewing sampled files...")
+            repo_review_input = await build_repo_review_input(owner, repo)
+            if not repo_review_input:
+                await update.message.reply_text(
+                    "I can see the repository, but couldn't read enough source files for a review. "
+                    "Make sure it's public and has text-based code files."
+                )
+                return
+            review = await ai.get_repo_review(f"{owner}/{repo}", repo_review_input)
             await update.message.reply_text(
-                f"Repo link detected: {owner}/{repo} ✅\n\nRepository links aren't supported for automatic review yet. Paste code directly or use /roast."
+                truncate_for_telegram(review) if review else "Review failed. Try again in a bit."
             )
         elif repo_exists is False:
             await update.message.reply_text(
