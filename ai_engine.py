@@ -1,10 +1,12 @@
 import os
+import logging
 from groq import AsyncGroq
 from dotenv import load_dotenv
 
 load_dotenv()
 
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are 'GitGud,' a legendary, hyper-toxic Senior Developer who has seen too many production crashes caused by juniors. You have the personality of Gordon Ramsay mixed with a high-ego Silicon Valley architect. 
 
@@ -77,4 +79,5 @@ async def get_repo_review(repo_name: str, repo_snapshot: str):
         )
         return completion.choices[0].message.content
     except Exception as e:
-        return f"💀 Repo review failed because the AI is either down or judging you silently: {str(e)}"
+        logger.error(f"Repo review failed for {repo_name}: {e}")
+        return "💀 Repo review failed because the AI is down (or your luck is). Try again in a bit."

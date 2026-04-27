@@ -43,6 +43,7 @@ TEXT_FILE_EXTENSIONS = {
     ".hpp", ".cs", ".rb", ".php", ".swift", ".kt", ".kts", ".scala", ".sh", ".sql", ".yaml",
     ".yml", ".json", ".toml", ".ini", ".cfg", ".md", ".txt", ".html", ".css"
 }
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 def is_code(text):
     if not text or len(text) < 5:
@@ -217,6 +218,15 @@ async def build_repo_review_input(owner: str, repo: str):
         + "\n\n".join(snippets)
     )
 
+def truncate_for_telegram(text: str, max_len: int = TELEGRAM_MAX_MESSAGE_LENGTH):
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len].rstrip()
+    last_space = truncated.rfind(" ")
+    if last_space > int(max_len * 0.75):
+        truncated = truncated[:last_space]
+    return truncated.rstrip() + "…"
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await db.update_last_submission(user.id, user.username)
@@ -306,7 +316,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             review = await ai.get_repo_review(f"{owner}/{repo}", repo_review_input)
             await update.message.reply_text(
-                review[:4000] if review else "Review failed. Try again in a bit."
+                truncate_for_telegram(review) if review else "Review failed. Try again in a bit."
             )
         elif repo_exists is False:
             await update.message.reply_text(
