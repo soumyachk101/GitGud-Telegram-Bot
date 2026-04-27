@@ -40,7 +40,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.update_last_submission(user.id, user.username)
     
     welcome_text = (
-        "🍝 *SpaghettiSniffer v1.1*\n\n"
+        "🍝 *GitGud v1.2*\n\n"
         "I am the Senior Architect you never wanted. Throw your code at me, "
         "and I'll tell you exactly why you're an overhead cost.\n\n"
         "Commands:\n"
@@ -126,6 +126,26 @@ async def post_init(application):
     await db.init_db()
     logger.info("Database initialized.")
 
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for new_member in update.message.new_chat_members:
+        if new_member.id == context.bot.id:
+            # Bot itself joined
+            await update.message.reply_text(
+                "🍝 *GitGud has entered the chat.*\n\n"
+                "I'm here to watch your production crashes and laugh. "
+                "Type /start to see how I can ruin your day.",
+                parse_mode=constants.ParseMode.MARKDOWN
+            )
+        else:
+            # Someone else joined
+            welcome_msgs = [
+                f"Oh look, another 'Developer' joined: @{new_member.username or new_member.first_name}. I hope your code is better than your profile picture.",
+                f"Welcome @{new_member.username or new_member.first_name}. Please don't push to main while I'm looking.",
+                f"Fresh meat! @{new_member.username or new_member.first_name}, I've already smelled your code from the invite link. It's a biohazard."
+            ]
+            import random
+            await update.message.reply_text(random.choice(welcome_msgs))
+
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
     
@@ -135,6 +155,10 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('manager_off', manager_off))
     application.add_handler(CommandHandler('status', status))
     application.add_handler(CommandHandler('roast', roast_command))
+    
+    # Welcome message for new members
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+    
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     # Scheduler
@@ -144,5 +168,5 @@ if __name__ == '__main__':
     else:
         logger.warning("JobQueue not available. Manager nudges will not work.")
     
-    logger.info("🍝 SpaghettiSniffer is hunting for code...")
+    logger.info("🍝 GitGud is hunting for code...")
     application.run_polling()

@@ -1,4 +1,4 @@
-# 🍝 SpaghettiSniffer
+# 🍝 GitGud
 
 The hyper-toxic Senior Developer bot that roasts your code using Groq-powered AI (LLaMA 3.3 70B).
 
