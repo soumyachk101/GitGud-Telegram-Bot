@@ -57,30 +57,45 @@ def extract_github_repo(text):
     owner, repo = match.group(1), match.group(2)
     if repo.endswith(".git"):
         repo = repo[:-4]
+    if owner[0] in ".-" or owner[-1] in ".-" or repo[0] in ".-" or repo[-1] in ".-":
+        return None
     return owner, repo
 
 async def github_repo_exists(owner: str, repo: str):
     def _check():
         url = f"https://api.github.com/repos/{owner}/{repo}"
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "GitGud-Telegram-Bot"
-        }
-        if GITHUB_TOKEN:
-            headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
-        request = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                return response.status == 200
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return False
-            logger.warning(f"Failed to verify GitHub repo {owner}/{repo}: HTTP {e.code}")
+        def _attempt(auth_header=None):
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "GitGud-Telegram-Bot"
+            }
+            if auth_header:
+                headers["Authorization"] = auth_header
+
+            request = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return response.getcode() == 200
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    return False
+                if e.code == 401 and auth_header:
+                    return "unauthorized"
+                logger.warning(f"Failed to verify GitHub repo {owner}/{repo}: HTTP {e.code}")
+                return None
+            except Exception as e:
+                logger.warning(f"Failed to verify GitHub repo {owner}/{repo}: {e}")
+                return None
+
+        if GITHUB_TOKEN:
+            for scheme in ("Bearer", "token"):
+                result = _attempt(f"{scheme} {GITHUB_TOKEN}")
+                if result != "unauthorized":
+                    return result
             return None
-        except Exception as e:
-            logger.warning(f"Failed to verify GitHub repo {owner}/{repo}: {e}")
-            return None
+
+        return _attempt()
 
     return await asyncio.to_thread(_check)
 
